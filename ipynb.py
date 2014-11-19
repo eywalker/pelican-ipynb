@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# modified by eywalker
 from __future__ import unicode_literals
 import os
 import json
@@ -19,6 +20,8 @@ from pelican.readers import MarkdownReader, HTMLReader, BaseReader
 import IPython
 from IPython.config import Config
 from IPython.nbconvert.exporters import HTMLExporter
+from IPython.nbformat import current as nbformat
+
 
 try:
     from IPython.nbconvert.filters.highlight import _pygment_highlight
@@ -166,6 +169,16 @@ class MyHTMLParser(HTMLReader._HTMLParser):
             if self.wordcount >= self.settings['SUMMARY_MAX_LENGTH']:
                 self.summary = self._data_buffer
 
+def join_metadata(m1, m2):
+    """
+    Join two metadata dictionaries. If
+    keys overlap, latter dictionary overrides
+    the value.
+    """
+    m = m1.copy()
+    for k, v in m2.items():
+        m[k] = v
+    return m
 
 class IPythonNB(BaseReader):
     enabled = True
@@ -180,30 +193,49 @@ class IPythonNB(BaseReader):
         metadata_filename = filename.split('.')[0] + '.ipynb-meta'
         metadata_filepath = os.path.join(filedir, metadata_filename)
 
-        # Load metadata
+        if filename.lower().startswith('draft'):
+            metadata['status'] = 'draft'
+
+        with open(filepath) as f:
+            nb = nbformat.read(f, 'ipynb') # readin ipynb content
+
+
+        first_cell = nb.worksheets[0].cells[0]
+
+        # Read in metadata
+        metadata = join_metadata(metadata, nb.metadata)
+
+        if 'pelican' in first_cell.metadata:
+            m = first_cell.metadata['pelican']
+            metadata = join_metadata(metadata, m)
+
         if os.path.exists(metadata_filepath):
             # Metadata is on a external file, process using Pelican MD Reader
             md_reader = MarkdownReader(self.settings)
-            _content, metadata = md_reader.read(metadata_filepath)
-        else:
-            # Load metadata from ipython notebook file
-            ipynb_file = open(filepath)
-            metadata = json.load(ipynb_file)['metadata']
+            _content, m = md_reader.read(metadata_filepath)
+            metadata = join_metadata(metadata, m)
 
-            # Fix metadata to pelican standards
-            for key, value in metadata.items():
-                del metadata[key]
-                key = key.lower()
-                metadata[key] = self.process_metadata(key, value)
-            metadata['ipython'] = True
+        for k, v in metadata.items():
+            del metadata[k]
+            k = k.lower()
+            metadata[k] = self.process_metadata(k, v)
+
+        metadata['ipython'] = True
+
+        # use first cell as title if set
+        field = 'IPYNB_FIRST_CELL_HEADING_AS_TITLE'
+        if self.settings.get(field, False) and first_cell.cell_type == 'heading':
+            metadata['title'] = first_cell.source
+            # Truncate the first cell from notebook
+            nb.worksheets[0].cells = nb.worksheets[0].cells[1:]
 
         # Convert ipython notebook to html
-        config = Config({'CSSHTMLHeaderTransformer': {'enabled': True,
+        config = Config({'CSSHTMLHeaderPreprocessor': {'enabled': True,
                          'highlight_class': '.highlight-ipynb'}})
         exporter = HTMLExporter(config=config, template_file='basic',
                                 filters={'highlight2html': custom_highlighter})
 
-        content, info = exporter.from_filename(filepath)
+        content, info = exporter.from_notebook_node(nb)
 
         if BeautifulSoup:
             soup = BeautifulSoup(content)
@@ -213,7 +245,6 @@ class IPythonNB(BaseReader):
         else:
             soup = content
 
-        # Process using Pelican HTMLReader
         content = '<body>{0}</body>'.format(soup)  # So Pelican HTMLReader works
         parser = MyHTMLParser(self.settings, filename)
         parser.feed(content)
@@ -221,7 +252,14 @@ class IPythonNB(BaseReader):
         body = parser.body
         summary = parser.summary
 
-        metadata['summary'] = summary
+        field = 'IPYNB_FIRST_CONTENT_AS_SUMMARY'
+        first_cell = nb.worksheets[0].cells[0]
+        if self.settings.get(field, False) and first_cell.cell_type == 'markdown':
+            raw = nb.worksheets[0].cells[0].source
+            md = markdown.Markdown()
+            metadata['summary'] = md.convert(raw)
+        else:
+            metadata['summary'] = summary
 
         # Remove some CSS styles, so it doesn't break the themes.
         def filter_tags(style_text):
@@ -240,13 +278,9 @@ class IPythonNB(BaseReader):
         return body, metadata
 
 
-settings = {}
-
 
 def add_reader(arg):
-    global settings
     arg.settings['READERS']['ipynb'] = IPythonNB
-    settings = arg.settings
 
 
 def register():
