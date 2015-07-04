@@ -172,8 +172,8 @@ class MyHTMLParser(HTMLReader._HTMLParser):
 def join_metadata(m1, m2):
     """
     Join two metadata dictionaries. If
-    keys overlap, latter dictionary overrides
-    the value.
+    keys overlap, the value from the second
+    dictionary is used.
     """
     m = m1.copy()
     for k, v in m2.items():
@@ -193,12 +193,12 @@ class IPythonNB(BaseReader):
         metadata_filename = filename.split('.')[0] + '.ipynb-meta'
         metadata_filepath = os.path.join(filedir, metadata_filename)
 
+        # If filename starts with draft, set the status accordingly
         if filename.lower().startswith('draft'):
             metadata['status'] = 'draft'
 
         with open(filepath) as f:
             nb = nbformat.read(f, 'ipynb') # readin ipynb content
-
 
         first_cell = nb.worksheets[0].cells[0]
 
@@ -215,6 +215,7 @@ class IPythonNB(BaseReader):
             _content, m = md_reader.read(metadata_filepath)
             metadata = join_metadata(metadata, m)
 
+        # Reformat metadata into pelican acceptable format
         for k, v in metadata.items():
             del metadata[k]
             k = k.lower()
@@ -222,7 +223,7 @@ class IPythonNB(BaseReader):
 
         metadata['ipython'] = True
 
-        # use first cell as title if set
+        # use first cell as the title if flag is set
         field = 'IPYNB_FIRST_CELL_HEADING_AS_TITLE'
         if self.settings.get(field, False) and first_cell.cell_type == 'heading':
             metadata['title'] = first_cell.source
@@ -261,7 +262,7 @@ class IPythonNB(BaseReader):
         else:
             metadata['summary'] = summary
 
-        # Remove some CSS styles, so it doesn't break the themes.
+        # Remove some CSS styles, so it doesn't break the theme.
         def filter_tags(style_text):
             style_list = style_text.split('\n')
             exclude = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'ul', 'ol', 'li',
@@ -276,7 +277,6 @@ class IPythonNB(BaseReader):
         body = css + body
 
         return body, metadata
-
 
 
 def add_reader(arg):
